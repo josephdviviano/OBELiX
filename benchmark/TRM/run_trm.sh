@@ -2,7 +2,7 @@
 #SBATCH --job-name=trm-obelix
 #SBATCH --output=trm_%j.log
 #SBATCH --error=trm_%j.err
-#SBATCH --time=02:00:00
+#SBATCH --time=12:00:00
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
@@ -16,7 +16,7 @@
 #   bash run_trm.sh                            # any machine with CUDA/CPU
 #   bash run_trm.sh --epochs 200 --H_cycles 5  # override defaults
 #
-# Estimated runtime: ~30 min on GPU, ~1 hr on CPU
+# Estimated runtime: ~5 hr on GPU (5000 epochs, no early stopping)
 
 source ~/miniconda3/bin/activate
 conda activate obelix
@@ -50,6 +50,28 @@ echo ""
 # -- MLP backbone (train → test) ---------------------------------------------
 echo "=== MLP backbone (train/test evaluation) ==="
 python3 -u train.py --backbone mlp --seed 42 "$@"
+echo ""
+
+# -- Sklearn baselines (RF + MLP) --------------------------------------------
+echo "=== Sklearn baselines (RF + MLP, full + CIF-only) ==="
+python3 -u ../tuning.py
+echo ""
+
+# -- CIF-only experiments (comparable to GNN baselines) ----------------------
+echo "=== Transformer backbone, CIF-only (5-fold CV) ==="
+python3 -u train.py --backbone transformer --cif_only --cv --seed 42 "$@"
+echo ""
+
+echo "=== MLP backbone, CIF-only (5-fold CV) ==="
+python3 -u train.py --backbone mlp --cif_only --cv --seed 42 "$@"
+echo ""
+
+echo "=== Transformer backbone, CIF-only (train/test evaluation) ==="
+python3 -u train.py --backbone transformer --cif_only --seed 42 "$@"
+echo ""
+
+echo "=== MLP backbone, CIF-only (train/test evaluation) ==="
+python3 -u train.py --backbone mlp --cif_only --seed 42 "$@"
 echo ""
 
 echo "=== Done ==="

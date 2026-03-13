@@ -103,10 +103,21 @@ def evaluate(model, loader, criterion, device):
     return total_loss / len(loader.dataset)
 
 
+def make_scheduler(optimizer, warmup_epochs, total_epochs):
+    """Linear warmup followed by cosine decay to 0."""
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return (epoch + 1) / warmup_epochs
+        progress = (epoch - warmup_epochs) / max(1, total_epochs - warmup_epochs)
+        return 0.5 * (1.0 + np.cos(np.pi * progress))
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
 def train_model(cfg, x_train, y_train, x_val, y_val, args, device, verbose=True):
-    """Train a single model, return best validation MAE."""
+    """Train for all epochs, return model at best validation MAE."""
     model = TRM(cfg).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
+    scheduler = make_scheduler(optimizer, args.warmup, args.epochs)
     criterion = nn.L1Loss()  # MAE, matching existing benchmark scoring
 
     train_loader = make_loader(x_train, y_train, args.batch_size)
@@ -114,26 +125,24 @@ def train_model(cfg, x_train, y_train, x_val, y_val, args, device, verbose=True)
 
     best_val = float("inf")
     best_state = model.state_dict()
-    patience_counter = 0
+    best_epoch = 0
 
     for epoch in range(args.epochs):
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
         val_loss = evaluate(model, val_loader, criterion, device)
+        scheduler.step()
 
         if val_loss < best_val:
             best_val = val_loss
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            patience_counter = 0
-        else:
-            patience_counter += 1
+            best_epoch = epoch + 1
 
         if verbose and (epoch + 1) % 50 == 0:
-            print(f"  epoch {epoch+1:4d}  train_mae={train_loss:.4f}  val_mae={val_loss:.4f}")
+            lr = optimizer.param_groups[0]["lr"]
+            print(f"  epoch {epoch+1:4d}  train_mae={train_loss:.4f}  val_mae={val_loss:.4f}  lr={lr:.2e}")
 
-        if patience_counter >= args.patience:
-            if verbose:
-                print(f"  early stopping at epoch {epoch+1}")
-            break
+    if verbose:
+        print(f"  best epoch: {best_epoch}  best val_mae: {best_val:.4f}")
 
     model.load_state_dict(best_state)
     return model, best_val
@@ -174,8 +183,8 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--wd", type=float, default=1e-4)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--epochs", type=int, default=500)
-    parser.add_argument("--patience", type=int, default=50)
+    parser.add_argument("--epochs", type=int, default=5000)
+    parser.add_argument("--warmup", type=int, default=100)
     parser.add_argument("--cif_only", action="store_true")
     parser.add_argument("--no_partial", action="store_true")
     parser.add_argument("--cv", action="store_true", help="Run 5-fold cross-validation")

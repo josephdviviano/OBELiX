@@ -51,7 +51,7 @@ def process_data(cif_only, partial):
     return x_train, y_train, test_xy
 
 
-def model_tune(model, x_train, y_train, cif_only, partial):
+def model_tune(model, x_train, y_train, test_xy, cif_only, partial):
     print("Experiment Config")
     print("Model:", model)
     print("Is this CIF only (False means whole dataset)", cif_only)
@@ -126,30 +126,29 @@ def model_tune(model, x_train, y_train, cif_only, partial):
 
     print("Best parameters:", gs.best_params_)
     print(
-        f"Best {model_str} result:",
+        f"Best {model_str} CV MAE:",
         abs(gs.cv_results_["mean_test_score"][gs.best_index_]),
         "±",
         gs.cv_results_["std_test_score"][gs.best_index_],
     )
-    plt_name = f"{model_str}_benchmark_"
-    if cif_only:
-        plt_name += "cifonly"
-    else:
-        plt_name += "whole"
-    if not partial:
-        plt_name += "roundPO"
-    plt_name += ".png"
-    try:
-        plt.figure()
-        plt.plot(gs.best_estimator_.loss_curve_)
-        plt.yscale("log")
-        plt.savefig(plt_name)
-    except AttributeError:
-        pass
-    plt.figure()
-    plt.scatter(y_train, gs.best_estimator_.predict(x_train))
-    plt.plot(y_train, y_train)
-    plt.savefig("parity+" + plt_name)
+
+    # Evaluate best estimator on test set
+    best_model = gs.best_estimator_
+    for eval_cif_only in [False, True]:
+        if eval_cif_only:
+            m = test_xy[test_xy["CIF"] == "Match"]
+            cm = test_xy[test_xy["CIF"] == "Close Match"]
+            test = pd.concat([m, cm], axis=0)
+            test = test.drop("CIF", axis=1)
+        else:
+            test = test_xy.drop("CIF", axis=1)
+
+        x_test = test.iloc[:, :-1].to_numpy()
+        y_test = test.iloc[:, -1].to_numpy()
+        y_pred = best_model.predict(x_test)
+        loss = mean_absolute_error(y_test, y_pred)
+        label = "CIF-only" if eval_cif_only else "Whole dataset"
+        print(f"Test MAE ({label}): {loss:.4f}")
 
 
 def test(model, params, x_train, y_train, test_xy, cif_only, partial):
@@ -185,42 +184,17 @@ def test(model, params, x_train, y_train, test_xy, cif_only, partial):
 
 
 if __name__ == "__main__":
-    # Specify the models: either MLP or RF
-
-    # Specify whether you want to train on the subset
-    # of data for which cif are available (cif_only = True)
-    # or the whole dataset (cif_onl = False)
-
-    # Specify whether you want to train on the data as is,
-    # without changing partial occupancy values (partial = True)
-    # or round composition's partial occupancy values (partial = False)
-
-    model = "MLP"
-    cif_only = True
-    partial = True
-
-    # For testing, specify the hparam results you get from
-    # tuning in this dictionary
-
-    # params = {
-    #     "activation": "relu",
-    #     "batch_size": 16,
-    #     "early_stopping": True,
-    #     "hidden_layer_sizes": [64, 64, 64, 64, 64],
-    #     "learning_rate": "adaptive",
-    #     "learning_rate_init": 0.003,
-    #     "max_iter": 1000,
-    #     "n_iter_no_change": 100,
-    #     "solver": "adam",
-    # }
-
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        x_train, y_train, test_xy = process_data(cif_only=cif_only, partial=partial)
-
-        # Depending on whether you want to run hyper parameter tuning
-        # or test a model with specifc hparams, uncomment either
-        # model_tune dunction or test fucnction
-
-        model_tune(model, x_train, y_train, cif_only=cif_only, partial=partial)
-        # test(model, params, x_train, y_train, test_xy, cif_only, partial)
+        for model_name in ["RF", "MLP"]:
+            for cif_only in [False, True]:
+                print(f"\n{'='*60}")
+                print(f"=== {model_name} ({'CIF-only' if cif_only else 'Full dataset'}) ===")
+                print(f"{'='*60}")
+                x_train, y_train, test_xy = process_data(
+                    cif_only=cif_only, partial=True,
+                )
+                model_tune(
+                    model_name, x_train, y_train, test_xy,
+                    cif_only=cif_only, partial=True,
+                )
