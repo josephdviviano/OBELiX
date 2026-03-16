@@ -116,7 +116,7 @@ def make_scheduler(optimizer, warmup_epochs, total_epochs):
 def train_model(cfg, x_train, y_train, x_val, y_val, args, device, verbose=True):
     """Train for all epochs, return model at best validation MAE."""
     model = TRM(cfg).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
     scheduler = make_scheduler(optimizer, args.warmup, args.epochs)
     criterion = nn.L1Loss()  # MAE, matching existing benchmark scoring
 
@@ -181,7 +181,7 @@ def main():
     parser.add_argument("--H_cycles", type=int, default=3)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--wd", type=float, default=1e-4)
+    parser.add_argument("--wd", type=float, default=1e-2)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=5000)
     parser.add_argument("--warmup", type=int, default=100)

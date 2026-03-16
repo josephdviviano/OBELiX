@@ -1,0 +1,14 @@
+{
+  "backbone": "transformer",
+  "cv_mae": 0.951142265824152,
+  "hidden_dim": 128,
+  "num_heads": 8,
+  "L_layers": 3,
+  "L_cycles": 1,
+  "H_cycles": 4,
+  "dropout": 0.0,
+  "lr": 0.0007683818338208118,
+  "wd": 0.0002907055455650045,
+  "batch_size": 16,
+  "warmup": 150
+}

@@ -1,3 +1,4 @@
+import json
 import warnings
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from sklearn.preprocessing import StandardScaler
 
 np.random.seed(0)
 
-BASE_PATH = Path(__file__).parent.parent
+BASE_PATH = Path(__file__).resolve().parent.parent
 DATA_PATH = BASE_PATH / "data"
 MODEL_PATH = BASE_PATH / "benchmark"
 
@@ -117,20 +118,33 @@ def model_tune(model, x_train, y_train, test_xy, cif_only, partial):
             "n_estimators": 50,
         }
 
-        model = RandomForestRegressor(**hparams_ex, oob_score="neg_mean_absolute_error")
+        model = RandomForestRegressor(**hparams_ex, oob_score=True)
 
     gs = GridSearchCV(
         estimator=model, param_grid=hparams, cv=5, scoring="neg_mean_absolute_error"
     )
     gs.fit(x_train, y_train)
 
+    best_cv_mae = abs(gs.cv_results_["mean_test_score"][gs.best_index_])
+    best_cv_std = gs.cv_results_["std_test_score"][gs.best_index_]
+
     print("Best parameters:", gs.best_params_)
-    print(
-        f"Best {model_str} CV MAE:",
-        abs(gs.cv_results_["mean_test_score"][gs.best_index_]),
-        "±",
-        gs.cv_results_["std_test_score"][gs.best_index_],
-    )
+    print(f"Best {model_str} CV MAE: {best_cv_mae} ± {best_cv_std}")
+
+    # Save best config
+    best_config = {
+        "model": model_str,
+        "cif_only": cif_only,
+        "cv_mae": best_cv_mae,
+        "cv_std": best_cv_std,
+        "params": {k: v if not isinstance(v, np.integer) else int(v)
+                   for k, v in gs.best_params_.items()},
+    }
+    suffix = "cif" if cif_only else "full"
+    config_path = MODEL_PATH / f"best_{model_str.lower()}_{suffix}.json"
+    with open(config_path, "w") as f:
+        json.dump(best_config, f, indent=2)
+    print(f"Saved best config to {config_path}")
 
     # Evaluate best estimator on test set
     best_model = gs.best_estimator_
@@ -160,7 +174,7 @@ def test(model, params, x_train, y_train, test_xy, cif_only, partial):
     if model == "MLP":
         model = MLPRegressor(**params)
     elif model == "RF":
-        model = RandomForestRegressor(**params, oob_score="neg_mean_absolute_error")
+        model = RandomForestRegressor(**params, oob_score=True)
 
     model.fit(x_train, y_train)
 

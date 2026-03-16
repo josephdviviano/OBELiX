@@ -1,0 +1,22 @@
+{
+  "model": "MLP",
+  "cif_only": false,
+  "cv_mae": 1.2544681766188504,
+  "cv_std": 0.19456083135752916,
+  "params": {
+    "activation": "relu",
+    "batch_size": 64,
+    "early_stopping": true,
+    "hidden_layer_sizes": [
+      32,
+      32,
+      32,
+      32
+    ],
+    "learning_rate": "adaptive",
+    "learning_rate_init": 0.01,
+    "max_iter": 1000,
+    "n_iter_no_change": 100,
+    "solver": "adam"
+  }
+}

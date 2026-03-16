@@ -1,0 +1,12 @@
+{
+  "model": "RF",
+  "cif_only": true,
+  "cv_mae": 1.2481476700576457,
+  "cv_std": 0.12952162777890394,
+  "params": {
+    "max_depth": 12,
+    "max_features": null,
+    "min_samples_leaf": 1,
+    "n_estimators": 50
+  }
+}
