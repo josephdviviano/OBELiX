@@ -178,4 +178,5 @@ cython_debug/
 
 .claude/
 *.csv
+*.err
 obelixdata/

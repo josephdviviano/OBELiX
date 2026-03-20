@@ -1,3 +1,4 @@
 *.err
 *.log
 *.out
+*.db
