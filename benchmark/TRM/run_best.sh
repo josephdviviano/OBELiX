@@ -8,7 +8,7 @@
 #SBATCH --mem=16G
 #SBATCH --partition=main
 #
-# Run TRM with best tuned hyperparameters (from Optuna) on full + CIF-only.
+# Evaluate TRM tabular backbones (best Optuna configs) on train/test split.
 #
 # Usage:
 #   sbatch run_best.sh
@@ -20,7 +20,9 @@ set -euo pipefail
 
 cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")}"
 
-echo "=== TRM Best Hyperparameter Runs ==="
+mkdir -p checkpoints
+
+echo "=== TRM Tabular — Test Evaluation ==="
 echo "Host: $(hostname)"
 echo "Date: $(date)"
 echo "GPU:  $(python3 -c 'import torch; print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU only")')"
@@ -34,52 +36,28 @@ MLP_ARGS="--backbone mlp --hidden_dim 64 --num_heads 8 --L_layers 3 --L_cycles 3
 
 # -- Full dataset --
 echo "============================================================"
-echo "=== Transformer (full dataset, 5-fold CV) ==="
-echo "============================================================"
-python3 -u train.py $TRANS_ARGS --cv --seed 42
-echo ""
-
-echo "============================================================"
 echo "=== Transformer (full dataset, train/test) ==="
 echo "============================================================"
-python3 -u train.py $TRANS_ARGS --seed 42
-echo ""
-
-echo "============================================================"
-echo "=== MLP (full dataset, 5-fold CV) ==="
-echo "============================================================"
-python3 -u train.py $MLP_ARGS --cv --seed 42
+python3 -u train.py $TRANS_ARGS --save_path checkpoints/transformer_full.pt --seed 42
 echo ""
 
 echo "============================================================"
 echo "=== MLP (full dataset, train/test) ==="
 echo "============================================================"
-python3 -u train.py $MLP_ARGS --seed 42
+python3 -u train.py $MLP_ARGS --save_path checkpoints/mlp_full.pt --seed 42
 echo ""
 
 # -- CIF-only --
 echo "============================================================"
-echo "=== Transformer (CIF-only, 5-fold CV) ==="
-echo "============================================================"
-python3 -u train.py $TRANS_ARGS --cif_only --cv --seed 42
-echo ""
-
-echo "============================================================"
 echo "=== Transformer (CIF-only, train/test) ==="
 echo "============================================================"
-python3 -u train.py $TRANS_ARGS --cif_only --seed 42
-echo ""
-
-echo "============================================================"
-echo "=== MLP (CIF-only, 5-fold CV) ==="
-echo "============================================================"
-python3 -u train.py $MLP_ARGS --cif_only --cv --seed 42
+python3 -u train.py $TRANS_ARGS --cif_only --save_path checkpoints/transformer_cif.pt --seed 42
 echo ""
 
 echo "============================================================"
 echo "=== MLP (CIF-only, train/test) ==="
 echo "============================================================"
-python3 -u train.py $MLP_ARGS --cif_only --seed 42
+python3 -u train.py $MLP_ARGS --cif_only --save_path checkpoints/mlp_cif.pt --seed 42
 echo ""
 
 echo "=== Done ==="

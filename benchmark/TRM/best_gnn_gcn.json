@@ -1,0 +1,21 @@
+{
+  "backbone": "gnn_gcn",
+  "cv_mae": 1.2933808404580107,
+  "gnn_conv_layers": 5,
+  "n_gaussians": 32,
+  "gnn_cutoff": 6.0,
+  "pool_k": 128,
+  "hidden_dim": 128,
+  "num_heads": 8,
+  "L_layers": 3,
+  "L_cycles": 3,
+  "H_cycles": 2,
+  "dropout": 0.4,
+  "gcn_adj_k": 8,
+  "gcn_drop_edge": 0.30000000000000004,
+  "gcn_gate_residual": false,
+  "lr": 0.0006002255062417215,
+  "wd": 0.00020633626432731784,
+  "batch_size": 16,
+  "warmup": 50
+}

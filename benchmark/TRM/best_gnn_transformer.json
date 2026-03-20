@@ -1,0 +1,18 @@
+{
+  "backbone": "gnn_transformer",
+  "cv_mae": 1.2640105346337753,
+  "gnn_conv_layers": 2,
+  "n_gaussians": 32,
+  "gnn_cutoff": 7.0,
+  "pool_k": 64,
+  "hidden_dim": 128,
+  "num_heads": 2,
+  "L_layers": 3,
+  "L_cycles": 2,
+  "H_cycles": 3,
+  "dropout": 0.1,
+  "lr": 0.00988636022365111,
+  "wd": 0.006502472607464972,
+  "batch_size": 32,
+  "warmup": 50
+}
