@@ -27,10 +27,17 @@ DATA_PATH = BASE_PATH / "data"
 CIF_DIR = DATA_PATH / "randomized_cifs"
 
 
-def structure_to_data(structure, target, cutoff=5.0):
+def structure_to_data(structure, target, cutoff=5.0, include_vectors=False):
     """Convert a pymatgen Structure to a PyG Data object.
 
     Handles disordered sites by using the majority species.
+
+    Args:
+        structure: pymatgen Structure
+        target: regression target value
+        cutoff: neighbor distance cutoff (Angstroms)
+        include_vectors: if True, also store full 3D edge displacement vectors
+            and atomic positions (needed for equivariant models like MACE).
     """
     # Node features: atomic numbers
     atomic_nums = []
@@ -47,6 +54,7 @@ def structure_to_data(structure, target, cutoff=5.0):
     # Edges from neighbor list
     all_neighbors = structure.get_all_neighbors(cutoff, include_index=True)
     src, dst, dists = [], [], []
+    vecs = [] if include_vectors else None
     for i, neighbors in enumerate(all_neighbors):
         for neighbor in neighbors:
             # neighbor is (Site, distance, index, image)
@@ -55,6 +63,10 @@ def structure_to_data(structure, target, cutoff=5.0):
             src.append(i)
             dst.append(j)
             dists.append(d)
+            if include_vectors:
+                # Displacement vector: neighbor image coords - center coords
+                vec = np.array(neighbor[0].coords) - np.array(structure[i].coords)
+                vecs.append(vec)
 
     if len(src) == 0:
         # Fallback: self-loops if no neighbors found (shouldn't happen with reasonable cutoff)
@@ -62,18 +74,44 @@ def structure_to_data(structure, target, cutoff=5.0):
         src = list(range(n))
         dst = list(range(n))
         dists = [0.0] * n
+        if include_vectors:
+            vecs = [[0.0, 0.0, 0.0]] * n
 
     edge_index = torch.tensor([src, dst], dtype=torch.long)
     edge_attr = torch.tensor(dists, dtype=torch.float).unsqueeze(-1)
 
     y = torch.tensor([target], dtype=torch.float)
 
-    return Data(z=z, edge_index=edge_index, edge_attr=edge_attr, y=y,
+    data = Data(z=z, edge_index=edge_index, edge_attr=edge_attr, y=y,
                 num_nodes=len(atomic_nums))
 
+    if include_vectors:
+        data.edge_vectors = torch.tensor(np.array(vecs), dtype=torch.float)
+        data.pos = torch.tensor(
+            np.array([site.coords for site in structure]), dtype=torch.float,
+        )
 
-def load_gnn_data(data_path=None, cutoff=5.0):
+    return data
+
+
+def compute_avg_num_neighbors(data_list):
+    """Compute average number of neighbors per node across a dataset.
+
+    Useful for MACE message normalization (avg_num_neighbors parameter).
+    """
+    total_edges = sum(d.edge_index.shape[1] for d in data_list)
+    total_nodes = sum(d.num_nodes for d in data_list)
+    return total_edges / total_nodes if total_nodes > 0 else 0.0
+
+
+def load_gnn_data(data_path=None, cutoff=5.0, include_vectors=False):
     """Load CIF-matching entries and build PyG datasets for train/test.
+
+    Args:
+        data_path: path to data directory (default: project data/)
+        cutoff: neighbor distance cutoff (Angstroms)
+        include_vectors: if True, include 3D edge vectors and positions
+            (needed for equivariant models like MACE).
 
     Returns:
         (train_list, test_list): lists of PyG Data objects
@@ -109,7 +147,8 @@ def load_gnn_data(data_path=None, cutoff=5.0):
             try:
                 structure = Structure.from_file(str(cif_path))
                 target = np.log10(df_cif.loc[sid, "Ionic conductivity (S cm-1)"])
-                data = structure_to_data(structure, target, cutoff=cutoff)
+                data = structure_to_data(structure, target, cutoff=cutoff,
+                                        include_vectors=include_vectors)
                 data.sid = sid
                 data_list.append(data)
             except Exception as e:

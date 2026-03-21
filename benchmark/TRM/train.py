@@ -137,9 +137,9 @@ def train_model(cfg, x_train, y_train, x_val, y_val, args, device, verbose=True)
     """Train for all epochs, return model at best validation MAE.
 
     For tabular backbones: x_train/x_val are numpy arrays, y_train/y_val are numpy arrays.
-    For GNN backbones: x_train/x_val are lists of PyG Data, y_train/y_val are ignored (targets in Data.y).
+    For GNN/MACE backbones: x_train/x_val are lists of PyG Data, y_train/y_val are ignored (targets in Data.y).
     """
-    is_gnn = cfg.backbone.startswith("gnn_")
+    is_gnn = cfg.backbone.startswith("gnn_") or cfg.backbone == "mace"
     model = TRM(cfg).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
     scheduler = make_scheduler(optimizer, args.warmup, args.epochs)
@@ -183,9 +183,9 @@ def train_model(cfg, x_train, y_train, x_val, y_val, args, device, verbose=True)
 def cross_validate(cfg, x, y, args, device, n_folds=5):
     """5-fold CV, returns mean ± std MAE.
 
-    For GNN backbones, x is a list of PyG Data objects and y is None.
+    For GNN/MACE backbones, x is a list of PyG Data objects and y is None.
     """
-    is_gnn = cfg.backbone.startswith("gnn_")
+    is_gnn = cfg.backbone.startswith("gnn_") or cfg.backbone == "mace"
     n = len(x) if is_gnn else x.shape[0]
     kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
     scores = []
@@ -214,7 +214,8 @@ def cross_validate(cfg, x, y, args, device, n_folds=5):
 def main():
     parser = argparse.ArgumentParser(description="TRM benchmark for OBELiX")
     parser.add_argument("--backbone", choices=["transformer", "mlp", "gcn",
-                                                "gnn_transformer", "gnn_mlp", "gnn_gcn"],
+                                                "gnn_transformer", "gnn_mlp", "gnn_gcn",
+                                                "mace"],
                         default="transformer")
     parser.add_argument("--hidden_dim", type=int, default=64)
     parser.add_argument("--num_heads", type=int, default=4)
@@ -243,18 +244,38 @@ def main():
     parser.add_argument("--no_gcn_gate_residual", dest="gcn_gate_residual", action="store_false")
     parser.add_argument("--save_path", type=str, default=None,
                         help="Save trained model checkpoint (state_dict + config) to this path")
+    # MACE-specific args
+    parser.add_argument("--mace_max_ell", type=int, default=2,
+                        help="Max spherical harmonics order (1 or 2)")
+    parser.add_argument("--mace_correlation", type=int, default=2,
+                        help="Body order for symmetric contraction (2=3-body, 3=4-body)")
+    parser.add_argument("--mace_num_features", type=int, default=128,
+                        help="Feature channels per angular momentum order")
+    parser.add_argument("--mace_num_bessel", type=int, default=8,
+                        help="Number of Bessel radial basis functions")
+    parser.add_argument("--mace_interaction", type=str,
+                        default="RealAgnosticResidualInteractionBlock",
+                        help="MACE interaction block class name")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    is_gnn = args.backbone.startswith("gnn_")
+    is_mace = args.backbone == "mace"
+    is_gnn = args.backbone.startswith("gnn_") or is_mace
 
+    avg_nn = 10.0  # default; auto-computed below for MACE
     if is_gnn:
         from graph_data import load_gnn_data, make_pyg_loader
-        train_data, test_data = load_gnn_data(cutoff=args.gnn_cutoff)
-        num_features = 0  # not used for GNN
+        train_data, test_data = load_gnn_data(
+            cutoff=args.gnn_cutoff, include_vectors=is_mace,
+        )
+        num_features = 0  # not used for GNN/MACE
+        if is_mace:
+            from graph_data import compute_avg_num_neighbors
+            avg_nn = compute_avg_num_neighbors(train_data)
+            print(f"  avg_num_neighbors: {avg_nn:.1f}")
     else:
         x_train, y_train, x_test, y_test, test_xy_full = load_data(
             cif_only=args.cif_only, partial=not args.no_partial,
@@ -277,12 +298,23 @@ def main():
         gcn_adj_k=args.gcn_adj_k,
         gcn_drop_edge=args.gcn_drop_edge,
         gcn_gate_residual=args.gcn_gate_residual,
+        mace_max_ell=args.mace_max_ell,
+        mace_correlation=args.mace_correlation,
+        mace_num_features=args.mace_num_features,
+        mace_num_bessel=args.mace_num_bessel,
+        mace_interaction=args.mace_interaction,
+        mace_avg_num_neighbors=avg_nn,
     )
 
     print(f"Config: backbone={cfg.backbone}, hidden={cfg.hidden_dim}, "
           f"heads={cfg.num_heads}, L_layers={cfg.L_layers}, "
           f"L_cycles={cfg.L_cycles}, H_cycles={cfg.H_cycles}")
-    if is_gnn:
+    if is_mace:
+        print(f"MACE: max_ell={cfg.mace_max_ell}, correlation={cfg.mace_correlation}, "
+              f"features={cfg.mace_num_features}, bessel={cfg.mace_num_bessel}")
+        print(f"  interaction={cfg.mace_interaction}")
+        print(f"Data: {len(train_data)} train, {len(test_data)} test graphs")
+    elif is_gnn:
         print(f"GNN: conv_layers={cfg.gnn_conv_layers}, gaussians={cfg.n_gaussians}, "
               f"cutoff={cfg.gnn_cutoff}, pool_k={cfg.pool_k}")
         print(f"Data: {len(train_data)} train, {len(test_data)} test graphs")

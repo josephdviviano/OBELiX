@@ -8,10 +8,16 @@ Backbone variants:
   - "gnn_transformer": GNN encoder + attention pooling → transformer reasoning
   - "gnn_mlp": GNN encoder + attention pooling → MLP reasoning
   - "gnn_gcn": GNN encoder + attention pooling → GCN reasoning blocks
+  - "mace": MACE equivariant encoder + per-node MACE reasoning blocks
 
 All share the same recursive structure: H outer cycles × L inner cycles through
 a stack of L_layers blocks, with persistent memory (prediction + reasoning state).
 Only the final H cycle receives gradient.
+
+The MACE backbone uses equivariant message passing (spherical harmonics, tensor
+products, symmetric contractions) throughout the recurrent core.  Features remain
+per-node with no pseudo-node aggregation — batching uses PyG's native flat
+concatenation.  Requires mace-torch and e3nn.
 """
 
 from dataclasses import dataclass
@@ -32,7 +38,7 @@ class TRMConfig:
     L_layers: int = 2  # blocks per reasoning module
     L_cycles: int = 2  # inner loop iterations
     H_cycles: int = 3  # outer loop iterations (only last gets grad)
-    backbone: Literal["transformer", "mlp", "gcn", "gnn_transformer", "gnn_mlp", "gnn_gcn"] = "transformer"
+    backbone: Literal["transformer", "mlp", "gcn", "gnn_transformer", "gnn_mlp", "gnn_gcn", "mace"] = "transformer"
     dropout: float = 0.1
     # GCN reasoning block parameters
     gcn_adj_k: int = 8           # top-k neighbors in learnable adjacency
@@ -44,6 +50,15 @@ class TRMConfig:
     gnn_cutoff: float = 5.0
     pool_k: int = 32  # number of attention pooling queries
     max_atomic_num: int = 100
+    # MACE parameters (used when backbone="mace")
+    mace_max_ell: int = 2               # max spherical harmonics order (0, 1, or 2)
+    mace_correlation: int = 2           # body order for symmetric contraction
+    mace_num_features: int = 128        # feature channels per angular momentum
+    mace_num_bessel: int = 8            # Bessel radial basis functions
+    mace_polynomial_cutoff: int = 5     # polynomial cutoff order
+    mace_radial_mlp: tuple = (64, 64, 64)  # radial MLP hidden sizes
+    mace_interaction: str = "RealAgnosticResidualInteractionBlock"
+    mace_avg_num_neighbors: float = 10.0  # average neighbors per node
 
 
 # -- Building blocks ---------------------------------------------------------
@@ -198,9 +213,32 @@ class TRM(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.is_gnn = cfg.backbone.startswith("gnn_")
+        self.is_mace = cfg.backbone == "mace"
         D = cfg.hidden_dim
 
-        if self.is_gnn:
+        if self.is_mace:
+            from mace_modules import MACEEncoder, MACEReasoningModule
+            self.mace_encoder = MACEEncoder(
+                num_features=cfg.mace_num_features,
+                max_ell=cfg.mace_max_ell,
+                num_bessel=cfg.mace_num_bessel,
+                polynomial_cutoff=cfg.mace_polynomial_cutoff,
+                cutoff=cfg.gnn_cutoff,
+                max_atomic_num=cfg.max_atomic_num,
+            )
+            self.core = MACEReasoningModule(
+                num_features=cfg.mace_num_features,
+                max_ell=cfg.mace_max_ell,
+                num_bessel=cfg.mace_num_bessel,
+                correlation=cfg.mace_correlation,
+                avg_num_neighbors=cfg.mace_avg_num_neighbors,
+                interaction_cls=cfg.mace_interaction,
+                radial_mlp=cfg.mace_radial_mlp,
+                num_layers=cfg.L_layers,
+                max_atomic_num=cfg.max_atomic_num,
+            )
+            head_dim = cfg.mace_num_features
+        elif self.is_gnn:
             from gnn_encoder import GNNEncoder, AttentionPooling
             self.gnn_encoder = GNNEncoder(
                 hidden_dim=D,
@@ -215,22 +253,23 @@ class TRM(nn.Module):
                 num_heads=cfg.num_heads,
             )
             S = cfg.pool_k
+            self.pred_init = nn.Parameter(torch.randn(1, S, D) * 0.02)
+            self.Z_init = nn.Parameter(torch.randn(1, S, D) * 0.02)
+            self.core = ReasoningModule(cfg, S)
+            head_dim = D
         else:
             S = cfg.num_features
             # Per-position projection: each feature slot gets its own Linear(1 → D)
             self.input_proj = nn.ModuleList([nn.Linear(1, D) for _ in range(S)])
             self.pos_embed = nn.Parameter(torch.randn(1, S, D) * 0.02)
+            self.pred_init = nn.Parameter(torch.randn(1, S, D) * 0.02)
+            self.Z_init = nn.Parameter(torch.randn(1, S, D) * 0.02)
+            self.core = ReasoningModule(cfg, S)
+            head_dim = D
 
-        # Learnable memory initialisation
-        self.pred_init = nn.Parameter(torch.randn(1, S, D) * 0.02)
-        self.Z_init = nn.Parameter(torch.randn(1, S, D) * 0.02)
-
-        # Shared reasoning module (applied recursively)
-        self.core = ReasoningModule(cfg, S)
-
-        # Regression head: pool over sequence, project to scalar
-        self.head_norm = nn.LayerNorm(D)
-        self.head = nn.Linear(D, 1)
+        # Regression head: pool over positions/nodes, project to scalar
+        self.head_norm = nn.LayerNorm(head_dim)
+        self.head = nn.Linear(head_dim, 1)
 
     def _encode_tabular(self, x: torch.Tensor) -> torch.Tensor:
         """Project (B, S) flat features → (B, S, D) hidden sequence."""
@@ -275,13 +314,63 @@ class TRM(nn.Module):
         pooled = pred.mean(dim=1)
         return self.head(self.head_norm(pooled)).squeeze(-1)
 
+    def _forward_mace(self, batch) -> torch.Tensor:
+        """Full forward pass for MACE backbone.
+
+        Features stay per-node throughout the entire recurrent computation.
+        Uses PyG flat batching (no padding needed).
+
+        Args:
+            batch: PyG Batch with z, edge_index, edge_vectors, batch, y
+        Returns:
+            (B,) scalar predictions
+        """
+        from torch_geometric.nn import global_mean_pool
+
+        # Encode graph → per-node features + edge descriptors
+        node_feats, node_attrs, edge_feats, edge_attrs = self.mace_encoder(
+            batch.z, batch.edge_index, batch.edge_vectors, batch.batch
+        )
+
+        # Store graph structure for the reasoning module (fixed during recurrence)
+        self.core.set_graph(node_attrs, edge_attrs, edge_feats, batch.edge_index)
+
+        encoded = node_feats  # (N, irreps_dim) — only L=0 populated initially
+
+        # Initialize memory: prediction from encoder, reasoning from zeros
+        pred = encoded.clone()
+        Z = torch.zeros_like(encoded)
+
+        # H_cycles - 1 without gradient (saves memory, matches reference TRM)
+        with torch.no_grad():
+            for _ in range(self.cfg.H_cycles - 1):
+                inj = pred + encoded
+                for _ in range(self.cfg.L_cycles):
+                    Z = self.core(Z, inj)
+                pred = self.core(pred, Z)
+            pred = pred.detach()
+            Z = Z.detach()
+
+        # Final H cycle with gradient
+        inj = pred + encoded
+        for _ in range(self.cfg.L_cycles):
+            Z = self.core(Z, inj)
+        pred = self.core(pred, Z)
+
+        # Readout: extract L=0 scalars → mean pool over nodes → linear head
+        scalar_pred = pred[:, :self.cfg.mace_num_features]  # (N, num_features)
+        pooled = global_mean_pool(scalar_pred, batch.batch)  # (B, num_features)
+        return self.head(self.head_norm(pooled)).squeeze(-1)
+
     def forward(self, x) -> torch.Tensor:
         """
         Args:
-            x: (B, num_features) for tabular, or PyG Batch for GNN backbones.
+            x: (B, num_features) for tabular, PyG Batch for GNN/MACE backbones.
         Returns:
             (B,) — predicted log10(ionic conductivity).
         """
+        if self.is_mace:
+            return self._forward_mace(x)
         if self.is_gnn:
             encoded = self._encode_graph(x)
             B = encoded.shape[0]
