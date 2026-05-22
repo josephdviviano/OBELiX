@@ -32,7 +32,10 @@ class TRMConfig:
     L_layers: int = 2  # blocks per reasoning module
     L_cycles: int = 2  # inner loop iterations
     H_cycles: int = 3  # outer loop iterations (only last gets grad)
-    backbone: Literal["transformer", "mlp", "gcn", "gnn_transformer", "gnn_mlp", "gnn_gcn"] = "transformer"
+    backbone: Literal[
+        "transformer", "mlp", "gcn",
+        "gnn_transformer", "gnn_mlp", "gnn_gcn",
+    ] = "transformer"
     dropout: float = 0.1
     # GCN reasoning block parameters
     gcn_adj_k: int = 8           # top-k neighbors in learnable adjacency

@@ -2,3 +2,8 @@
 *.log
 *.out
 *.db
+*.pt
+# Vendored EquiformerV3 (~68 MB external clone) and trained checkpoints —
+# fetch the former separately; the latter are training artifacts.
+vendor_equiformer_v3/
+checkpoints/

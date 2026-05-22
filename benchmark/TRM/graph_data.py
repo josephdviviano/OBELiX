@@ -67,8 +67,11 @@ def structure_to_data(structure, target, cutoff=5.0):
     edge_attr = torch.tensor(dists, dtype=torch.float).unsqueeze(-1)
 
     y = torch.tensor([target], dtype=torch.float)
+    pos = torch.tensor(structure.cart_coords, dtype=torch.float)
+    cell = torch.tensor(structure.lattice.matrix, dtype=torch.float).unsqueeze(0)
 
-    return Data(z=z, edge_index=edge_index, edge_attr=edge_attr, y=y,
+    return Data(z=z, pos=pos, cell=cell,
+                edge_index=edge_index, edge_attr=edge_attr, y=y,
                 num_nodes=len(atomic_nums))
 
 
